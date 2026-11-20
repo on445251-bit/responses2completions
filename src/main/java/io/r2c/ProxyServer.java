@@ -230,7 +230,7 @@ public final class ProxyServer {
 
         String chatId = ResponsesToChat.newChatCompletionId();
         long created = Instant.now().getEpochSecond();
-        StreamTranslator translator = new StreamTranslator(chatId, created, model, config.alwaysIncludeUsage());
+        StreamTranslator translator = new StreamTranslator(chatId, created, model, config.alwaysIncludeUsage);
 
         boolean sawTerminal = false;
         boolean failed = false;
