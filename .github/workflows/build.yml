@@ -1,0 +1,50 @@
+name: build
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Build fat jar
+        run: mvn -B -q clean package
+
+      - name: Show artifact
+        run: |
+          ls -lh target/*.jar
+          java -jar target/responses2completions.jar --version
+
+      - name: Self test (protocol translation)
+        run: |
+          chmod +x scripts/selftest.sh
+          ./scripts/selftest.sh target/responses2completions.jar
+
+      - name: Upload jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: responses2completions-jar
+          path: target/responses2completions.jar
+          if-no-files-found: error
+
+      - name: Attach jar to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/responses2completions.jar
