@@ -83,6 +83,28 @@ docker run --rm -p 8080:8080 \
 | `R2C_UPSTREAM_USER_AGENT` | `codex_cli_rs/0.42.0` | 上游 User-Agent。**很多站点只允许编程客户端**，默认伪装成 Codex CLI |
 | `R2C_LOG_LEVEL` | `info` | `error`/`warn`/`info`/`debug` |
 
+## 典型场景：只允许"编程客户端"的站点
+
+不少中转站点会对 **User-Agent 做白名单**，只放行 Codex / Cursor / Cline 等编程客户端，
+用 SDK 或脚本直连会被拒绝：
+
+```json
+{"error":{"code":"client_not_allowed",
+  "message":"本站仅支持编程客户端使用：Codex、Cursor、Cline…","type":"permission_error"}}
+```
+
+本代理默认把上游 UA 设成 `codex_cli_rs/0.42.0`，因此**任意客户端都能通过**：
+
+```bash
+R2C_UPSTREAM_BASE_URL=https://api.example.com/v1 \
+R2C_UPSTREAM_API_KEY=sk-xxxx \
+R2C_UPSTREAM_USER_AGENT='codex_cli_rs/0.42.0' \
+java -jar responses2completions.jar
+```
+
+> `R2C_UPSTREAM_USER_AGENT` 换成别的名字（如 `cursor/1.0`）也可用，
+> 取决于站点放行哪一类客户端。
+
 ## 接口
 
 | 方法 | 路径 | 说明 |
