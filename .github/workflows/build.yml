@@ -61,7 +61,10 @@ jobs:
 
       - name: Install platform and build tools
         run: |
-          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" > /dev/null
+          # Accepting licences first is required: sdkmanager exits non-zero when a
+          # package's licence has never been accepted on a fresh runner.
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "platform-tools" > /dev/null
           echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
       - name: Set up Gradle
