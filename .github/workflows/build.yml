@@ -56,16 +56,22 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install platform and build tools
+      - name: Prepare Android SDK
         run: |
-          # Accepting licences first is required: sdkmanager exits non-zero when a
-          # package's licence has never been accepted on a fresh runner.
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "platform-tools" > /dev/null
+          # GitHub's ubuntu runners ship the Android SDK, so no setup action is
+          # needed. Only licences must be accepted and the platform installed, and
+          # `yes` must feed the prompts (sdkmanager reads them from stdin).
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          SDKMANAGER="$(ls -d $ANDROID_HOME/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)"
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER="$(which sdkmanager)"
+          fi
+          echo "using $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          yes | "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0" "platform-tools" 2>&1 | tail -5
           echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+          cat android/local.properties
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
