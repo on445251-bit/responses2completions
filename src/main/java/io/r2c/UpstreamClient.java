@@ -24,6 +24,14 @@ public final class UpstreamClient {
 
     public UpstreamClient(Config config) {
         this.config = config;
+        // JDK HttpClient treats User-Agent as a restricted header and silently
+        // drops it unless it is explicitly allowed. Enable it before the client is
+        // built so the configured UA actually reaches the upstream.
+        String restricted = System.getProperty("jdk.httpclient.allowRestrictedHeaders", "");
+        if (!restricted.toLowerCase(java.util.Locale.ROOT).contains("user-agent")) {
+            System.setProperty("jdk.httpclient.allowRestrictedHeaders",
+                    restricted.isBlank() ? "user-agent" : restricted + ",user-agent");
+        }
         this.http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(config.upstreamConnectTimeoutSeconds))
                 .followRedirects(HttpClient.Redirect.NORMAL)
@@ -59,6 +67,9 @@ public final class UpstreamClient {
 
         String auth = resolveApiKey(clientAuthHeader);
         if (auth != null) b.header("Authorization", auth);
+        if (config.upstreamUserAgent != null && !config.upstreamUserAgent.isBlank()) {
+            b.header("User-Agent", config.upstreamUserAgent);
+        }
         for (Map.Entry<String, String> e : config.extraUpstreamHeaders.entrySet()) {
             b.header(e.getKey(), e.getValue());
         }

@@ -103,6 +103,7 @@ public final class Main {
                   R2C_ALWAYS_INCLUDE_USAGE          emit usage on the final chunk (default true)
                   R2C_UPSTREAM_HEADERS              extra headers, name=value;name=value
                   R2C_CORS                          permissive CORS for browsers (default true)
+                  R2C_UPSTREAM_USER_AGENT           UA sent upstream           (default codex_cli_rs/0.42.0)
                   R2C_LOG_LEVEL                     error|warn|info|debug   (default info)
                 """);
     }

@@ -121,7 +121,11 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length).decode("utf-8")
         try:
-            LAST["body"] = json.loads(raw)
+            last_body = json.loads(raw)
+            # Remember the UA alongside the body so the test can assert that the
+            # configured value actually reached the upstream.
+            last_body["__ua__"] = self.headers.get("User-Agent", "")
+            LAST["body"] = last_body
         except Exception:
             LAST["body"] = {"__raw__": raw}
 
@@ -213,6 +217,7 @@ check "temperature forwarded" "$UP" '"temperature":0.3'
 check "json_schema nested into text.format" "$UP" '"name":"out"'
 check "schema object preserved" "$UP" '"schema":{"type":"object"}'
 check_not "chat-only stop not forwarded" "$UP" '"stop":'
+check "configured User-Agent reaches upstream" "$UP" '"__ua__":"codex_cli_rs/0.42.0"'
 
 # ------------------------------------------------------------ streaming: text
 echo "== streaming: text deltas =="

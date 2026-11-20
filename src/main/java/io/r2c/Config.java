@@ -43,6 +43,12 @@ public final class Config {
     public final Map<String, String> extraUpstreamHeaders;
     /** Enable permissive CORS so browser based tools can call the proxy. */
     public final boolean cors;
+    /**
+     * User-Agent sent upstream. Some gateways only accept requests from
+     * programming clients (Codex, Cursor, Cline...) and reject everything else,
+     * so this is configurable rather than defaulting to the JVM's UA.
+     */
+    public final String upstreamUserAgent;
 
     private Config(Map<String, String> env) {
         this.port = intOf(env, "R2C_PORT", intOf(env, "PORT", 8080));
@@ -61,6 +67,9 @@ public final class Config {
         this.alwaysIncludeUsage = boolOf(env, "R2C_ALWAYS_INCLUDE_USAGE", true);
         this.extraUpstreamHeaders = parseHeaderList(strOf(env, "R2C_UPSTREAM_HEADERS", ""));
         this.cors = boolOf(env, "R2C_CORS", true);
+        // Default to a Codex CLI UA: many gateway whitelists key off it, and
+        // leaving the JVM default ("Java-http-client/17") gets rejected outright.
+        this.upstreamUserAgent = strOf(env, "R2C_UPSTREAM_USER_AGENT", "codex_cli_rs/0.42.0");
 
         Log.init(parseLevel(strOf(env, "R2C_LOG_LEVEL", "info")));
     }
@@ -96,6 +105,7 @@ public final class Config {
         Log.info("timeout=" + upstreamTimeoutSeconds + "s connect=" + upstreamConnectTimeoutSeconds + "s");
         if (!modelAliases.isEmpty()) Log.info("model_aliases=" + modelAliases);
         if (!extraUpstreamHeaders.isEmpty()) Log.info("extra_headers=" + extraUpstreamHeaders.keySet());
+        Log.info("upstream_user_agent=" + upstreamUserAgent);
     }
 
     private static String mask(String key) {

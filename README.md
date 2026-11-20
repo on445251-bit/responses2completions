@@ -80,6 +80,7 @@ docker run --rm -p 8080:8080 \
 | `R2C_ALWAYS_INCLUDE_USAGE` | `true` | 末块是否总带 usage |
 | `R2C_UPSTREAM_HEADERS` | 空 | 附加头，`name=value;name=value` |
 | `R2C_CORS` | `true` | 允许浏览器直连 |
+| `R2C_UPSTREAM_USER_AGENT` | `codex_cli_rs/0.42.0` | 上游 User-Agent。**很多站点只允许编程客户端**，默认伪装成 Codex CLI |
 | `R2C_LOG_LEVEL` | `info` | `error`/`warn`/`info`/`debug` |
 
 ## 接口
