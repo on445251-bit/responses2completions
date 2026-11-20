@@ -97,7 +97,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.endswith("/__last"):
-            body = json.dumps(LAST["body"] or {}).encode()
+            # Compact separators: the proxy serializes without spaces, so the
+            # assertions can match on exact substrings like "key":"value".
+            body = json.dumps(LAST["body"] or {}, separators=(",", ":")).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
