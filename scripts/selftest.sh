@@ -96,6 +96,14 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        if self.path.endswith("/__last"):
+            body = json.dumps(LAST["body"] or {}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.endswith("/models"):
             body = json.dumps({"object": "list",
                                "data": [{"id": "gpt-4.1-test", "object": "model"}]}).encode()
@@ -193,14 +201,16 @@ check "usage remapped to completion_tokens" "$RESP" '"completion_tokens":7'
 check "reasoning surfaced" "$RESP" 'thinking...'
 check "cached tokens carried" "$RESP" '"cached_tokens":3'
 
-# Verify what the proxy actually sent upstream.
-UP=$(curl -s -X POST "http://127.0.0.1:$STUB_PORT/v1/__last" -d '{}')
+# Verify what the proxy actually sent upstream. The stub records the previous
+# request, so query it with GET (a POST to /__last would overwrite the record).
+UP=$(curl -s "http://127.0.0.1:$STUB_PORT/v1/__last")
 echo "== request translation (chat -> responses) =="
 check "system became instructions" "$UP" '"instructions":"Be brief."'
 check "max_tokens became max_output_tokens" "$UP" '"max_output_tokens":64'
 check "temperature forwarded" "$UP" '"temperature":0.3'
 check "json_schema nested into text.format" "$UP" '"name":"out"'
-check_not "chat-only stop not forwarded" "$UP" '"stop"'
+check "schema object preserved" "$UP" '"schema":{"type":"object"}'
+check_not "chat-only stop not forwarded" "$UP" '"stop":'
 
 # ------------------------------------------------------------ streaming: text
 echo "== streaming: text deltas =="
