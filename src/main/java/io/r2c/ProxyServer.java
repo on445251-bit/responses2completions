@@ -2,9 +2,7 @@ package io.r2c;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.sun.net.httpserver.Headers;
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpServer;
+import io.r2c.net.NanoHttpServer;
 import io.r2c.translate.ChatToResponses;
 import io.r2c.translate.ResponsesToChat;
 import io.r2c.translate.StreamTranslator;
@@ -14,14 +12,10 @@ import io.r2c.util.Log;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -34,63 +28,77 @@ import java.util.concurrent.atomic.AtomicLong;
  *   <li>{@code GET  /v1/models} — passthrough so clients can list models</li>
  *   <li>{@code GET  /health} — liveness probe, never touches the upstream</li>
  * </ul>
+ *
+ * <p>Built only on {@link NanoHttpServer} and {@link UpstreamClient}, so the same
+ * class runs from a jar on a server and inside an Android app.
  */
 public final class ProxyServer {
+
+    /** Receives counters so the UI can display live activity. */
+    public interface Stats {
+        void onRequest(String model, boolean stream, boolean ok, long totalTokens);
+    }
 
     private final Config config;
     private final UpstreamClient upstream;
     private final ChatToResponses chatToResponses;
-    private final HttpServer server;
-    private final ExecutorService executor;
+    private final NanoHttpServer server;
     private final AtomicLong requestCounter = new AtomicLong();
+    private volatile Stats stats;
 
-    public ProxyServer(Config config) throws IOException {
+    public ProxyServer(Config config) {
         this.config = config;
         this.upstream = new UpstreamClient(config);
         this.chatToResponses = new ChatToResponses(config);
-
-        this.server = HttpServer.create(new InetSocketAddress(config.bindAddress, config.port), 0);
-        // Each SSE stream holds a thread for its whole lifetime, so use a cached
-        // pool: threads are reused across short requests and new ones are created
-        // only when many streams run concurrently.
-        this.executor = Executors.newCachedThreadPool(new java.util.concurrent.ThreadFactory() {
-            private final AtomicLong counter = new AtomicLong();
-
-            @Override
-            public Thread newThread(Runnable r) {
-                Thread t = new Thread(r, "r2c-http-" + counter.incrementAndGet());
-                t.setDaemon(true);
-                return t;
-            }
-        });
-        server.setExecutor(executor);
-
-        server.createContext("/", this::route);
+        this.server = new NanoHttpServer(config.bindAddress, config.port, this::route);
     }
 
-    public void start() {
+    public void setStats(Stats s) {
+        this.stats = s;
+    }
+
+    public void start() throws IOException {
         server.start();
-        Log.info("listening on http://" + config.bindAddress + ":" + config.port);
+        Log.info("listening on http://" + config.bindAddress + ":" + server.boundPort());
     }
 
     public void stop() {
-        server.stop(1);
-        executor.shutdownNow();
+        server.stop();
         upstream.close();
+    }
+
+    public boolean isRunning() {
+        return server.isRunning();
+    }
+
+    public int boundPort() {
+        return server.boundPort();
+    }
+
+    public long servedRequests() {
+        return requestCounter.get();
+    }
+
+    public long connectionCount() {
+        return server.connectionCount();
+    }
+
+    public Config config() {
+        return config;
     }
 
     // ------------------------------------------------------------------ routing
 
-    private void route(HttpExchange ex) {
-        String path = ex.getRequestURI().getPath();
-        String method = ex.getRequestMethod().toUpperCase(Locale.ROOT);
+    private void route(NanoHttpServer.Exchange ex) {
+        String path = ex.path;
+        String method = ex.method;
 
         try {
             if (config.cors) {
-                addCors(ex.getResponseHeaders());
                 if ("OPTIONS".equals(method)) {
-                    ex.sendResponseHeaders(204, -1);
-                    ex.close();
+                    NanoHttpServer.Headers h = new NanoHttpServer.Headers();
+                    addCors(h);
+                    ex.send(204, h, new byte[0]);
                     return;
                 }
             }
@@ -109,37 +117,35 @@ public final class ProxyServer {
                     handleChatCompletions(ex, method);
                     return;
                 default:
-                    // Normalize away a trailing slash, then retry once.
-                    if (path.length() > 1 && path.endsWith("/")) {
-                        String trimmed = path.substring(0, path.length() - 1);
-                        if (trimmed.endsWith("/chat/completions")) {
-                            handleChatCompletions(ex, method);
-                            return;
-                        }
+                    if (path.length() > 1 && path.endsWith("/")
+                            && path.substring(0, path.length() - 1).endsWith("/chat/completions")) {
+                        handleChatCompletions(ex, method);
+                        return;
                     }
                     writeJson(ex, 404, errorJson("unknown route: " + path, "invalid_request_error", null));
             }
         } catch (ProxyException pe) {
             Log.warn("request failed: " + pe.status() + " " + pe.getMessage());
             safeWriteJson(ex, pe.status(), pe.toErrorJson());
+            notifyStats(null, false, false, 0);
         } catch (Exception e) {
             Log.error("unhandled error on " + method + " " + path, e);
             safeWriteJson(ex, 500, errorJson("internal proxy error: " + e.getMessage(), "server_error", null));
-        } finally {
-            ex.close();
+            notifyStats(null, false, false, 0);
         }
     }
 
-    private void handleHealth(HttpExchange ex) throws IOException {
+    private void handleHealth(NanoHttpServer.Exchange ex) throws IOException {
         var root = Jsons.obj();
         root.put("status", "ok");
         root.put("upstream", config.responsesUrl());
         root.put("time", Instant.now().toString());
         root.put("served_requests", requestCounter.get());
+        root.put("connections", server.connectionCount());
         writeJson(ex, 200, Jsons.write(root));
     }
 
-    private void handleModels(HttpExchange ex, String method) throws IOException {
+    private void handleModels(NanoHttpServer.Exchange ex, String method) throws IOException {
         if (!"GET".equals(method)) {
             writeJson(ex, 405, errorJson("method not allowed", "invalid_request_error", null));
             return;
@@ -156,7 +162,8 @@ public final class ProxyServer {
             var data = root.putArray("data");
             String[] models = config.modelAliases.isEmpty()
                     ? new String[]{config.defaultModel}
-                    : config.modelAliases.keySet().stream().filter(k -> k.equals(k.toLowerCase(Locale.ROOT)))
+                    : config.modelAliases.keySet().stream()
+                            .filter(k -> k.equals(k.toLowerCase(Locale.ROOT)))
                             .toArray(String[]::new);
             long created = Instant.now().getEpochSecond();
             for (String m : models) {
@@ -170,7 +177,7 @@ public final class ProxyServer {
         }
     }
 
-    private void handleChatCompletions(HttpExchange ex, String method) throws IOException {
+    private void handleChatCompletions(NanoHttpServer.Exchange ex, String method) throws IOException {
         if (!"POST".equals(method)) {
             writeJson(ex, 405, errorJson("method not allowed, use POST", "invalid_request_error", null));
             return;
@@ -178,7 +185,7 @@ public final class ProxyServer {
         long seq = requestCounter.incrementAndGet();
         requireAuth(ex);
 
-        String raw = readBody(ex);
+        String raw = ex.readBody();
         JsonNode chatReq = Jsons.parseOrNull(raw);
         if (chatReq == null) {
             throw new ProxyException(400, "invalid_request_error", "invalid_json",
@@ -201,7 +208,7 @@ public final class ProxyServer {
         String clientAuth = authHeader(ex);
 
         if (stream) {
-            handleStreaming(ex, seq, responsesReq, upstreamBody, clientAuth, model);
+            handleStreaming(ex, seq, upstreamBody, clientAuth, model);
         } else {
             handleNonStreaming(ex, seq, upstreamBody, clientAuth, model);
         }
@@ -209,35 +216,34 @@ public final class ProxyServer {
 
     // ----------------------------------------------------------------- streaming
 
-    private void handleStreaming(HttpExchange ex, long seq, ObjectNode responsesReq,
-                                 String upstreamBody, String clientAuth, String model) throws IOException {
-        var upstreamResp = upstream.streamResponses(upstreamBody, clientAuth);
+    private void handleStreaming(NanoHttpServer.Exchange ex, long seq, String upstreamBody,
+                                 String clientAuth, String model) throws IOException {
+        // Open the upstream first: if it fails we can still return a proper HTTP
+        // error instead of a half-started SSE stream.
+        UpstreamClient.StreamHandle upstreamHandle = upstream.streamResponses(upstreamBody, clientAuth);
 
-        Headers respHeaders = ex.getResponseHeaders();
-        if (config.cors) addCors(respHeaders);
-        respHeaders.set("Content-Type", "text/event-stream; charset=utf-8");
-        respHeaders.set("Cache-Control", "no-cache, no-transform");
-        respHeaders.set("Connection", "keep-alive");
-        respHeaders.set("X-Accel-Buffering", "no");
-
-        // 0 means "chunked, length unknown" — required for streaming.
-        ex.sendResponseHeaders(200, 0);
+        NanoHttpServer.Headers headers = new NanoHttpServer.Headers();
+        if (config.cors) addCors(headers);
+        headers.set("Content-Type", "text/event-stream; charset=utf-8");
+        headers.set("Cache-Control", "no-cache, no-transform");
+        headers.set("X-Accel-Buffering", "no");
 
         String chatId = ResponsesToChat.newChatCompletionId();
         long created = Instant.now().getEpochSecond();
-        StreamTranslator translator = new StreamTranslator(chatId, created, model, config.alwaysIncludeUsage);
+        StreamTranslator translator = new StreamTranslator(chatId, created, model, config.alwaysIncludeUsage());
 
-        OutputStream out = ex.getResponseBody();
         boolean sawTerminal = false;
+        boolean failed = false;
+        try (upstreamHandle;
+             BufferedReader reader = new BufferedReader(
+                     new InputStreamReader(upstreamHandle.body, StandardCharsets.UTF_8))) {
 
-        try (var reader = new BufferedReader(
-                new InputStreamReader(upstreamResp.body(), StandardCharsets.UTF_8))) {
+            ex.beginChunked(200, headers);
 
             StringBuilder dataBuffer = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) {
                 if (line.isEmpty()) {
-                    // Blank line terminates one SSE event.
                     if (dataBuffer.length() > 0) {
                         String payload = dataBuffer.toString();
                         dataBuffer.setLength(0);
@@ -255,9 +261,8 @@ public final class ProxyServer {
                             Log.debug("#" + seq + " evt " + Jsons.str(event, "type", "?"));
                         }
 
-                        List<ObjectNode> chunks = translator.handle(event);
-                        for (ObjectNode chunk : chunks) {
-                            writeSse(out, Jsons.write(chunk));
+                        for (ObjectNode chunk : translator.handle(event)) {
+                            writeSse(ex, Jsons.write(chunk));
                         }
 
                         String type = Jsons.str(event, "type", "");
@@ -265,7 +270,8 @@ public final class ProxyServer {
                                 || type.equals("response.failed") || type.equals("error")) {
                             sawTerminal = true;
                             if (type.equals("error") || type.equals("response.failed")) {
-                                writeErrorEvent(out, event);
+                                failed = true;
+                                writeErrorEvent(ex, event);
                             }
                             break;
                         }
@@ -274,8 +280,7 @@ public final class ProxyServer {
                 }
 
                 if (line.startsWith(":")) {
-                    // Comment/heartbeat; forward as SSE comment so proxies keep alive.
-                    writeSseComment(out, line.substring(1).trim());
+                    writeSseComment(ex, line.substring(1).trim());
                     continue;
                 }
                 if (line.startsWith("data:")) {
@@ -284,8 +289,6 @@ public final class ProxyServer {
                     if (dataBuffer.length() > 0) dataBuffer.append('\n');
                     dataBuffer.append(value);
                 }
-                // event:/id:/retry: lines are irrelevant because we re-derive types
-                // from the JSON payload itself.
             }
 
             // Flush a trailing event if the upstream omitted the final blank line.
@@ -295,7 +298,7 @@ public final class ProxyServer {
                     JsonNode event = Jsons.parseOrNull(payload);
                     if (event != null) {
                         for (ObjectNode chunk : translator.handle(event)) {
-                            writeSse(out, Jsons.write(chunk));
+                            writeSse(ex, Jsons.write(chunk));
                         }
                     }
                 }
@@ -307,10 +310,9 @@ public final class ProxyServer {
                 if (config.alwaysIncludeUsage && translator.usage() == null) {
                     terminal.set("usage", ResponsesToChat.zeroUsage());
                 }
-                writeSse(out, Jsons.write(terminal));
+                writeSse(ex, Jsons.write(terminal));
             }
-            writeSseDone(out);
-            out.flush();
+            writeSseDone(ex);
 
             Log.info("#" + seq + " <- stream done"
                     + (sawTerminal ? "" : " (upstream ended without terminal event)"));
@@ -318,17 +320,15 @@ public final class ProxyServer {
             // A client disconnect surfaces here; that is normal for SSE.
             Log.warn("#" + seq + " stream interrupted: " + e.getMessage());
         } finally {
-            try {
-                out.close();
-            } catch (IOException ignored) {
-                // already closed by the container
-            }
+            ex.endChunked();
+            notifyStats(model, true, !failed, translator.usage() == null
+                    ? 0 : translator.usage().path("total_tokens").asInt(0));
         }
     }
 
     // ------------------------------------------------------------- non-streaming
 
-    private void handleNonStreaming(HttpExchange ex, long seq, String upstreamBody,
+    private void handleNonStreaming(NanoHttpServer.Exchange ex, long seq, String upstreamBody,
                                     String clientAuth, String model) throws IOException {
         String body = upstream.postResponses(upstreamBody, clientAuth);
         JsonNode responses = Jsons.parseOrNull(body);
@@ -347,15 +347,27 @@ public final class ProxyServer {
         String out = Jsons.write(chat);
 
         JsonNode usage = chat.get("usage");
+        int tokens = usage.path("total_tokens").asInt(0);
         Log.info("#" + seq + " <- " + chat.path("choices").path(0).path("finish_reason").asText("?")
-                + " tokens=" + usage.path("total_tokens").asInt(0));
+                + " tokens=" + tokens);
 
         writeJson(ex, 200, out);
+        notifyStats(model, false, true, tokens);
     }
 
     // ------------------------------------------------------------------- helpers
 
-    private void requireAuth(HttpExchange ex) {
+    private void notifyStats(String model, boolean stream, boolean ok, long tokens) {
+        Stats s = stats;
+        if (s == null) return;
+        try {
+            s.onRequest(model, stream, ok, tokens);
+        } catch (RuntimeException ignored) {
+            // Stats must never break a request.
+        }
+    }
+
+    private void requireAuth(NanoHttpServer.Exchange ex) {
         if (config.proxyApiKeys.isEmpty()) return;
         String header = authHeader(ex);
         if (header == null || header.isBlank()) {
@@ -370,33 +382,24 @@ public final class ProxyServer {
         }
     }
 
-    private static String authHeader(HttpExchange ex) {
-        return ex.getRequestHeaders().getFirst("Authorization");
+    private static String authHeader(NanoHttpServer.Exchange ex) {
+        return ex.requestHeaders.get("Authorization");
     }
 
-    private static String readBody(HttpExchange ex) throws IOException {
-        try (var in = ex.getRequestBody()) {
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-        }
+    private static void writeSse(NanoHttpServer.Exchange ex, String json) throws IOException {
+        ex.writeChunk("data: " + json + "\n\n");
     }
 
-    private static void writeSse(OutputStream out, String json) throws IOException {
-        out.write(("data: " + json + "\n\n").getBytes(StandardCharsets.UTF_8));
-        out.flush();
+    private static void writeSseComment(NanoHttpServer.Exchange ex, String comment) throws IOException {
+        ex.writeChunk(": " + comment + "\n\n");
     }
 
-    private static void writeSseComment(OutputStream out, String comment) throws IOException {
-        out.write((": " + comment + "\n\n").getBytes(StandardCharsets.UTF_8));
-        out.flush();
-    }
-
-    private static void writeSseDone(OutputStream out) throws IOException {
-        out.write("data: [DONE]\n\n".getBytes(StandardCharsets.UTF_8));
-        out.flush();
+    private static void writeSseDone(NanoHttpServer.Exchange ex) throws IOException {
+        ex.writeChunk("data: [DONE]\n\n");
     }
 
     /** Emits an in-band error so a chat client sees the failure mid-stream. */
-    private static void writeErrorEvent(OutputStream out, JsonNode serverEvent) throws IOException {
+    private static void writeErrorEvent(NanoHttpServer.Exchange ex, JsonNode serverEvent) throws IOException {
         var root = Jsons.obj();
         var err = root.putObject("error");
         JsonNode src = serverEvent.has("error") ? serverEvent.get("error") : serverEvent;
@@ -404,21 +407,23 @@ public final class ProxyServer {
         err.put("type", Jsons.str(src, "type", "upstream_error"));
         String code = Jsons.str(src, "code");
         if (code != null) err.put("code", code);
-        writeSse(out, Jsons.write(root));
+        writeSse(ex, Jsons.write(root));
     }
 
-    private static void writeJson(HttpExchange ex, int status, String body) throws IOException {
-        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
-        Headers h = ex.getResponseHeaders();
-        h.set("Content-Type", "application/json; charset=utf-8");
-        ex.sendResponseHeaders(status, bytes.length);
-        try (OutputStream out = ex.getResponseBody()) {
-            out.write(bytes);
+    private void writeJson(NanoHttpServer.Exchange ex, int status, String body) throws IOException {
+        if (config.cors) {
+            NanoHttpServer.Headers h = new NanoHttpServer.Headers();
+            addCors(h);
+            h.set("Content-Type", "application/json; charset=utf-8");
+            ex.send(status, h, body == null ? new byte[0] : body.getBytes(StandardCharsets.UTF_8));
+            return;
         }
+        ex.sendJson(status, body);
     }
 
     /** Best-effort write used in error handlers, where the stream may already be closed. */
-    private static void safeWriteJson(HttpExchange ex, int status, String body) {
+    private void safeWriteJson(NanoHttpServer.Exchange ex, int status, String body) {
+        if (ex.responded()) return;
         try {
             writeJson(ex, status, body);
         } catch (IOException | IllegalStateException ignored) {
@@ -426,14 +431,14 @@ public final class ProxyServer {
         }
     }
 
-    private static void addCors(Headers h) {
+    static void addCors(NanoHttpServer.Headers h) {
         h.set("Access-Control-Allow-Origin", "*");
         h.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
         h.set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, X-Requested-With");
         h.set("Access-Control-Max-Age", "86400");
     }
 
-    private static String errorJson(String message, String type, String code) {
+    static String errorJson(String message, String type, String code) {
         var root = Jsons.obj();
         var err = root.putObject("error");
         err.put("message", message);

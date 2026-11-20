@@ -11,7 +11,8 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  # ------------------------------------------------------------------ desktop jar
+  jar:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,8 +44,64 @@ jobs:
           path: target/responses2completions.jar
           if-no-files-found: error
 
-      - name: Attach jar to release
-        if: startsWith(github.ref, 'refs/tags/v')
+  # ----------------------------------------------------------------------- apk
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install platform and build tools
+        run: |
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" > /dev/null
+          echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build debug APK
+        working-directory: android
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Show artifact
+        run: |
+          find android/app/build/outputs -name '*.apk' -exec ls -lh {} \;
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: responses2completions-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------- release
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [ jar, apk ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect release assets
+        run: |
+          mkdir -p out
+          find artifacts -name '*.jar' -exec cp {} out/ \;
+          find artifacts -name '*.apk' -exec cp {} out/ \;
+          ls -lh out
+
+      - name: Attach assets to release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/responses2completions.jar
+          files: out/*

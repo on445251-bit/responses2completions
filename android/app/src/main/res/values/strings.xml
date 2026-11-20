@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">R2C 代理</string>
+    <string name="app_tagline">Responses API → Chat Completions</string>
+    <string name="settings_title">设置</string>
+
+    <!-- Channel -->
+    <string name="channel_name">代理运行状态</string>
+    <string name="channel_desc">保持代理端口在后台可用</string>
+    <string name="notification_stop">停止</string>
+
+    <!-- Status -->
+    <string name="status_running">运行中</string>
+    <string name="status_stopped">已停止</string>
+    <string name="status_upstream">上游：%1$s</string>
+    <string name="hint_need_key">尚未填写上游 API Key，请到设置里填写</string>
+    <string name="hint_endpoint">把这个地址填进客户端的 Base URL</string>
+    <string name="stats_empty">暂无请求</string>
+    <string name="stats_format">%1$d 次请求 · %2$d tokens</string>
+
+    <!-- Actions -->
+    <string name="action_start">启动代理</string>
+    <string name="action_stop">停止代理</string>
+    <string name="action_copy">复制</string>
+    <string name="action_settings">设置</string>
+    <string name="action_battery">忽略电池优化</string>
+    <string name="action_save">保存并生效</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_reset">恢复默认</string>
+    <string name="overlay_on">悬浮窗：开</string>
+    <string name="overlay_off">悬浮窗：关</string>
+
+    <!-- Sections -->
+    <string name="section_network">网络</string>
+    <string name="section_upstream">上游</string>
+    <string name="section_advanced">高级</string>
+    <string name="section_keepalive">后台保活</string>
+    <string name="hint_keepalive">代理运行在前台服务里，配合悬浮窗与电池白名单可以最大程度避免被系统清理。</string>
+    <string name="footer_note">客户端把 Base URL 指向上面的地址即可，路径会自动补 /v1/chat/completions。</string>
+
+    <!-- Fields -->
+    <string name="label_port">监听端口</string>
+    <string name="hint_port">8787</string>
+    <string name="hint_port_desc">建议用 1024 以上的端口，避免与其他服务冲突。</string>
+
+    <string name="label_bind_lan">允许局域网访问</string>
+    <string name="label_auto_start">打开应用时自动启动</string>
+    <string name="label_boot">开机后自动启动</string>
+    <string name="label_overlay">显示悬浮窗</string>
+
+    <string name="label_base_url">上游地址</string>
+    <string name="hint_base_url">https://api.example.com/v1</string>
+    <string name="hint_base_url_desc">必须是支持 Responses API 的站点，填到 /v1 为止。</string>
+
+    <string name="label_api_key">上游 API Key</string>
+    <string name="hint_api_key">sk-...</string>
+    <string name="label_pass_through">优先使用客户端自带的 Key</string>
+
+    <string name="label_model">默认模型</string>
+    <string name="hint_model">gpt-4o-mini</string>
+
+    <string name="label_ua">上游 User-Agent</string>
+    <string name="hint_ua">codex_cli_rs/0.42.0</string>
+    <string name="hint_ua_desc">很多站点只允许 Codex / Cursor 等编程客户端，默认伪装成 Codex CLI。</string>
+
+    <string name="label_timeout">上游超时（秒）</string>
+    <string name="hint_timeout">600</string>
+
+    <string name="label_access_keys">代理访问 Key（可选）</string>
+    <string name="hint_access_keys">key1,key2</string>
+    <string name="hint_access_keys_desc">填写后客户端必须带 Authorization 才能连接；留空则不校验。</string>
+
+    <string name="label_aliases">模型别名</string>
+    <string name="hint_aliases">gpt-4o=gpt-5</string>
+
+    <string name="label_headers">附加请求头</string>
+    <string name="hint_headers">X-Title=demo;X-Env=prod</string>
+
+    <string name="label_cors">允许浏览器跨域访问</string>
+
+    <!-- Messages -->
+    <string name="saved">已保存</string>
+    <string name="copied">已复制到剪贴板</string>
+    <string name="error_bad_port">端口必须是 1-65535 之间的数字</string>
+    <string name="error_bad_timeout">超时不能小于 5 秒</string>
+    <string name="error_bad_url">请填写上游地址</string>
+    <string name="error_no_overlay_settings">无法打开悬浮窗权限设置</string>
+    <string name="error_no_battery_settings">无法打开电池优化设置</string>
+    <string name="error_no_notification">未授予通知权限，后台保活可能失效</string>
+    <string name="battery_already">已在电池优化白名单中</string>
+    <string name="battery_not_needed">当前系统版本无需设置</string>
+</resources>

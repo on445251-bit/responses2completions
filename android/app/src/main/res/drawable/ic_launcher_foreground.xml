@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Two arrows: the request/response round trip between the two APIs. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:fillColor="#3B82F6"
+        android:pathData="M30,44h34l-6,-6 4,-4 13,13 -13,13 -4,-4 6,-6H30z" />
+
+    <path
+        android:fillColor="#22C55E"
+        android:pathData="M78,64H44l6,6 -4,4 -13,-13 13,-13 4,4 -6,6h34z" />
+</vector>

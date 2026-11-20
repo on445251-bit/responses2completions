@@ -3,40 +3,27 @@ package io.r2c;
 import io.r2c.util.Log;
 
 import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 /**
- * Thin wrapper over {@link HttpClient} for upstream Responses calls.
+ * Upstream HTTP calls built on {@link HttpURLConnection}.
  *
- * <p>One client instance is shared for the lifetime of the process: it owns the
- * connection pool, so building it per request would defeat keep-alive. Requests
- * are built per call because headers differ (client token passthrough).
+ * <p>{@code java.net.http.HttpClient} is not available on Android, so this uses the
+ * classic connection API that exists everywhere. Each call opens its own
+ * connection; the proxy's traffic is low volume (one connection per request, with
+ * streaming held open for the life of the answer), so a pool would buy little and
+ * complicates lifecycle management on mobile.
  */
 public final class UpstreamClient {
 
     private final Config config;
-    private final HttpClient http;
 
     public UpstreamClient(Config config) {
         this.config = config;
-        // JDK HttpClient treats User-Agent as a restricted header and silently
-        // drops it unless it is explicitly allowed. Enable it before the client is
-        // built so the configured UA actually reaches the upstream.
-        String restricted = System.getProperty("jdk.httpclient.allowRestrictedHeaders", "");
-        if (!restricted.toLowerCase(java.util.Locale.ROOT).contains("user-agent")) {
-            System.setProperty("jdk.httpclient.allowRestrictedHeaders",
-                    restricted.isBlank() ? "user-agent" : restricted + ",user-agent");
-        }
-        this.http = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(config.upstreamConnectTimeoutSeconds))
-                .followRedirects(HttpClient.Redirect.NORMAL)
-                .version(HttpClient.Version.HTTP_1_1)
-                .build();
     }
 
     /**
@@ -49,7 +36,6 @@ public final class UpstreamClient {
     private String resolveApiKey(String clientAuthHeader) {
         if (config.passThroughClientAuth && clientAuthHeader != null && !clientAuthHeader.isBlank()) {
             String v = clientAuthHeader.trim();
-            // Accept both "Bearer sk-..." and a raw key.
             if (v.regionMatches(true, 0, "Bearer ", 0, 7)) return v;
             if (v.regionMatches(true, 0, "Basic ", 0, 6)) return v;
             return "Bearer " + v;
@@ -58,111 +44,162 @@ public final class UpstreamClient {
         return "Bearer " + config.upstreamApiKey;
     }
 
-    private HttpRequest.Builder baseRequest(String url, String clientAuthHeader) {
-        HttpRequest.Builder b = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .timeout(Duration.ofSeconds(config.upstreamTimeoutSeconds))
-                .header("Content-Type", "application/json")
-                .header("Accept", "application/json");
+    private HttpURLConnection open(String url, String clientAuthHeader, boolean streaming) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        conn.setRequestMethod("POST");
+        conn.setConnectTimeout(config.upstreamConnectTimeoutSeconds * 1000);
+        // For streaming the read timeout must be generous: the model may think for a
+        // while before the first byte. Non-streaming uses the same budget.
+        conn.setReadTimeout(config.upstreamTimeoutSeconds * 1000);
+        conn.setDoOutput(true);
+        conn.setDoInput(true);
+        conn.setUseCaches(false);
+        conn.setInstanceFollowRedirects(true);
+        conn.setRequestProperty("Content-Type", "application/json");
+        conn.setRequestProperty("Accept", streaming ? "text/event-stream" : "application/json");
 
         String auth = resolveApiKey(clientAuthHeader);
-        if (auth != null) b.header("Authorization", auth);
+        if (auth != null) conn.setRequestProperty("Authorization", auth);
         if (config.upstreamUserAgent != null && !config.upstreamUserAgent.isBlank()) {
-            b.header("User-Agent", config.upstreamUserAgent);
+            conn.setRequestProperty("User-Agent", config.upstreamUserAgent);
         }
         for (Map.Entry<String, String> e : config.extraUpstreamHeaders.entrySet()) {
-            b.header(e.getKey(), e.getValue());
+            conn.setRequestProperty(e.getKey(), e.getValue());
         }
-        return b;
+        return conn;
     }
 
     /** Non-streaming call: returns the raw body, or throws on a non-2xx status. */
     public String postResponses(String body, String clientAuthHeader) {
-        HttpRequest req = baseRequest(config.responsesUrl(), clientAuthHeader)
-                .POST(HttpRequest.BodyPublishers.ofString(body))
-                .build();
-
-        HttpResponse<String> resp;
+        HttpURLConnection conn = null;
         try {
-            resp = http.send(req, HttpResponse.BodyHandlers.ofString());
-        } catch (IOException e) {
-            throw new ProxyException(502, "upstream_error", "connection_failed",
-                    "cannot reach upstream " + config.responsesUrl() + ": " + e.getMessage());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new ProxyException(499, "upstream_error", "interrupted", "request interrupted");
-        }
+            conn = open(config.responsesUrl(), clientAuthHeader, false);
+            byte[] payload = body.getBytes(StandardCharsets.UTF_8);
+            conn.setFixedLengthStreamingMode(payload.length);
+            conn.getOutputStream().write(payload);
 
-        if (resp.statusCode() / 100 != 2) {
-            Log.warn("upstream HTTP " + resp.statusCode() + ": " + summarize(resp.body()));
-            throw ProxyException.fromUpstream(resp.statusCode(), resp.body());
+            int status = conn.getResponseCode();
+            if (status / 100 != 2) {
+                String errBody = readAll(conn.getErrorStream());
+                Log.warn("upstream HTTP " + status + ": " + summarize(errBody));
+                throw ProxyException.fromUpstream(status, errBody);
+            }
+            return readAll(conn.getInputStream());
+        } catch (IOException e) {
+            throw connectionFailure(e);
+        } finally {
+            if (conn != null) conn.disconnect();
         }
-        return resp.body();
     }
 
-    /** Streaming call: returns the input stream of the SSE body for line reading. */
-    public HttpResponse<java.io.InputStream> streamResponses(String body, String clientAuthHeader) {
-        HttpRequest req = baseRequest(config.responsesUrl(), clientAuthHeader)
-                .header("Accept", "text/event-stream")
-                .POST(HttpRequest.BodyPublishers.ofString(body))
-                .build();
-
-        HttpResponse<java.io.InputStream> resp;
+    /**
+     * Streaming call: returns the connected stream so the caller can read SSE lines.
+     *
+     * <p>The caller owns the returned handle and must close it.
+     */
+    public StreamHandle streamResponses(String body, String clientAuthHeader) {
+        HttpURLConnection conn = null;
         try {
-            resp = http.send(req, HttpResponse.BodyHandlers.ofInputStream());
-        } catch (IOException e) {
-            throw new ProxyException(502, "upstream_error", "connection_failed",
-                    "cannot reach upstream " + config.responsesUrl() + ": " + e.getMessage());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new ProxyException(499, "upstream_error", "interrupted", "request interrupted");
-        }
+            conn = open(config.responsesUrl(), clientAuthHeader, true);
+            byte[] payload = body.getBytes(StandardCharsets.UTF_8);
+            conn.setFixedLengthStreamingMode(payload.length);
+            conn.getOutputStream().write(payload);
 
-        if (resp.statusCode() / 100 != 2) {
-            String errBody;
-            try (var in = resp.body()) {
-                errBody = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-            } catch (IOException e) {
-                errBody = "";
+            int status = conn.getResponseCode();
+            if (status / 100 != 2) {
+                String errBody = readAll(conn.getErrorStream());
+                Log.warn("upstream HTTP " + status + ": " + summarize(errBody));
+                conn.disconnect();
+                throw ProxyException.fromUpstream(status, errBody);
             }
-            Log.warn("upstream HTTP " + resp.statusCode() + ": " + summarize(errBody));
-            throw ProxyException.fromUpstream(resp.statusCode(), errBody);
+            return new StreamHandle(conn, conn.getInputStream());
+        } catch (IOException e) {
+            if (conn != null) conn.disconnect();
+            throw connectionFailure(e);
         }
-        return resp;
     }
 
     /** Fetches the upstream model list, used by {@code GET /v1/models}. */
     public String getModels(String clientAuthHeader) {
-        HttpRequest req = baseRequest(config.modelsUrl(), clientAuthHeader).GET().build();
+        HttpURLConnection conn = null;
         try {
-            HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
-            if (resp.statusCode() / 100 != 2) {
-                throw ProxyException.fromUpstream(resp.statusCode(), resp.body());
+            conn = (HttpURLConnection) new URL(config.modelsUrl()).openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(config.upstreamConnectTimeoutSeconds * 1000);
+            conn.setReadTimeout(Math.min(config.upstreamTimeoutSeconds, 60) * 1000);
+            conn.setRequestProperty("Accept", "application/json");
+            String auth = resolveApiKey(clientAuthHeader);
+            if (auth != null) conn.setRequestProperty("Authorization", auth);
+            if (config.upstreamUserAgent != null && !config.upstreamUserAgent.isBlank()) {
+                conn.setRequestProperty("User-Agent", config.upstreamUserAgent);
             }
-            return resp.body();
+            for (Map.Entry<String, String> e : config.extraUpstreamHeaders.entrySet()) {
+                conn.setRequestProperty(e.getKey(), e.getValue());
+            }
+
+            int status = conn.getResponseCode();
+            if (status / 100 != 2) {
+                throw ProxyException.fromUpstream(status, readAll(conn.getErrorStream()));
+            }
+            return readAll(conn.getInputStream());
         } catch (IOException e) {
-            throw new ProxyException(502, "upstream_error", "connection_failed",
-                    "cannot reach upstream: " + e.getMessage());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new ProxyException(499, "upstream_error", "interrupted", "request interrupted");
+            throw connectionFailure(e);
+        } finally {
+            if (conn != null) conn.disconnect();
         }
     }
 
-    private static String summarize(String body) {
+    /** Handle over a live SSE connection. */
+    public static final class StreamHandle implements AutoCloseable {
+        private final HttpURLConnection connection;
+        public final InputStream body;
+
+        StreamHandle(HttpURLConnection connection, InputStream body) {
+            this.connection = connection;
+            this.body = body;
+        }
+
+        @Override
+        public void close() {
+            try {
+                body.close();
+            } catch (IOException ignored) {
+                // stream already closed
+            }
+            connection.disconnect();
+        }
+    }
+
+    private ProxyException connectionFailure(IOException e) {
+        String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+        return new ProxyException(502, "upstream_error", "connection_failed",
+                "cannot reach upstream " + config.responsesUrl() + ": " + msg);
+    }
+
+    private static String readAll(InputStream in) throws IOException {
+        if (in == null) return "";
+        try (InputStream s = in) {
+            java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream(8192);
+            byte[] chunk = new byte[8192];
+            int n;
+            while ((n = s.read(chunk)) != -1) {
+                buf.write(chunk, 0, n);
+            }
+            return buf.toString(StandardCharsets.UTF_8);
+        }
+    }
+
+    static String summarize(String body) {
         if (body == null) return "";
         String flat = body.replaceAll("\\s+", " ").trim();
         return flat.length() <= 300 ? flat : flat.substring(0, 300) + "...";
     }
 
+    /**
+     * Nothing to release: connections are disconnected per call. Kept so callers do
+     * not need to know that.
+     */
     public void close() {
-        // HttpClient is not AutoCloseable before Java 21, so shut it down
-        // reflectively: on 21+ this releases the selector and executor, on 17 it is
-        // a no-op and the daemon threads die with the JVM.
-        try {
-            HttpClient.class.getMethod("close").invoke(http);
-        } catch (ReflectiveOperationException | RuntimeException ignored) {
-            // Older runtime: nothing to release explicitly.
-        }
+        // no-op
     }
 }

@@ -44,6 +44,7 @@ public final class Main {
         ProxyServer server;
         try {
             server = new ProxyServer(config);
+            server.start();
         } catch (java.io.IOException e) {
             System.err.println("cannot bind " + config.bindAddress + ":" + config.port
                     + " — " + e.getMessage());
@@ -57,7 +58,6 @@ public final class Main {
             finalServer.stop();
         }, "r2c-shutdown"));
 
-        server.start();
         Log.info("ready. POST chat completions to http://" + config.bindAddress + ":"
                 + config.port + "/v1/chat/completions");
 

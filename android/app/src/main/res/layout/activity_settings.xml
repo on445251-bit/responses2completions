@@ -1,0 +1,207 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#121316"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <!-- ============ Network ============ -->
+        <TextView
+            style="@style/SectionHeader"
+            android:text="@string/section_network" />
+
+        <TextView
+            style="@style/FieldLabel"
+            android:text="@string/label_port" />
+
+        <EditText
+            android:id="@+id/port_field"
+            style="@style/FieldInput"
+            android:hint="@string/hint_port"
+            android:inputType="number"
+            android:maxLength="5" />
+
+        <TextView
+            style="@style/FieldHint"
+            android:text="@string/hint_port_desc" />
+
+        <CheckBox
+            android:id="@+id/bind_lan_box"
+            style="@style/FieldCheck"
+            android:text="@string/label_bind_lan" />
+
+        <CheckBox
+            android:id="@+id/auto_start_box"
+            style="@style/FieldCheck"
+            android:text="@string/label_auto_start" />
+
+        <CheckBox
+            android:id="@+id/boot_box"
+            style="@style/FieldCheck"
+            android:text="@string/label_boot" />
+
+        <CheckBox
+            android:id="@+id/overlay_box"
+            style="@style/FieldCheck"
+            android:text="@string/label_overlay" />
+
+        <!-- ============ Upstream ============ -->
+        <TextView
+            style="@style/SectionHeader"
+            android:text="@string/section_upstream" />
+
+        <TextView
+            style="@style/FieldLabel"
+            android:text="@string/label_base_url" />
+
+        <EditText
+            android:id="@+id/base_url_field"
+            style="@style/FieldInput"
+            android:hint="@string/hint_base_url"
+            android:inputType="textUri" />
+
+        <TextView
+            style="@style/FieldHint"
+            android:text="@string/hint_base_url_desc" />
+
+        <TextView
+            style="@style/FieldLabel"
+            android:text="@string/label_api_key" />
+
+        <EditText
+            android:id="@+id/api_key_field"
+            style="@style/FieldInput"
+            android:hint="@string/hint_api_key"
+            android:inputType="textVisiblePassword" />
+
+        <CheckBox
+            android:id="@+id/pass_through_box"
+            style="@style/FieldCheck"
+            android:text="@string/label_pass_through" />
+
+        <TextView
+            style="@style/FieldLabel"
+            android:text="@string/label_model" />
+
+        <EditText
+            android:id="@+id/model_field"
+            style="@style/FieldInput"
+            android:hint="@string/hint_model"
+            android:inputType="text" />
+
+        <TextView
+            style="@style/FieldLabel"
+            android:text="@string/label_ua" />
+
+        <EditText
+            android:id="@+id/ua_field"
+            style="@style/FieldInput"
+            android:hint="@string/hint_ua"
+            android:inputType="text" />
+
+        <TextView
+            style="@style/FieldHint"
+            android:text="@string/hint_ua_desc" />
+
+        <TextView
+            style="@style/FieldLabel"
+            android:text="@string/label_timeout" />
+
+        <EditText
+            android:id="@+id/timeout_field"
+            style="@style/FieldInput"
+            android:hint="@string/hint_timeout"
+            android:inputType="number" />
+
+        <!-- ============ Advanced ============ -->
+        <TextView
+            style="@style/SectionHeader"
+            android:text="@string/section_advanced" />
+
+        <TextView
+            style="@style/FieldLabel"
+            android:text="@string/label_access_keys" />
+
+        <EditText
+            android:id="@+id/access_keys_field"
+            style="@style/FieldInput"
+            android:hint="@string/hint_access_keys"
+            android:inputType="text" />
+
+        <TextView
+            style="@style/FieldHint"
+            android:text="@string/hint_access_keys_desc" />
+
+        <TextView
+            style="@style/FieldLabel"
+            android:text="@string/label_aliases" />
+
+        <EditText
+            android:id="@+id/aliases_field"
+            style="@style/FieldInput"
+            android:hint="@string/hint_aliases"
+            android:inputType="text" />
+
+        <TextView
+            style="@style/FieldLabel"
+            android:text="@string/label_headers" />
+
+        <EditText
+            android:id="@+id/headers_field"
+            style="@style/FieldInput"
+            android:hint="@string/hint_headers"
+            android:inputType="text" />
+
+        <CheckBox
+            android:id="@+id/cors_box"
+            style="@style/FieldCheck"
+            android:text="@string/label_cors" />
+
+        <!-- ============ Buttons ============ -->
+        <Button
+            android:id="@+id/save_button"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_marginTop="22dp"
+            android:background="@drawable/btn_primary"
+            android:text="@string/action_save"
+            android:textAllCaps="false"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/cancel_button"
+                android:layout_width="0dp"
+                android:layout_height="46dp"
+                android:layout_weight="1"
+                android:background="@drawable/btn_ghost"
+                android:text="@string/action_cancel"
+                android:textAllCaps="false"
+                android:textColor="#E5E7EB" />
+
+            <Button
+                android:id="@+id/reset_button"
+                android:layout_width="0dp"
+                android:layout_height="46dp"
+                android:layout_marginStart="8dp"
+                android:layout_weight="1"
+                android:background="@drawable/btn_ghost"
+                android:text="@string/action_reset"
+                android:textAllCaps="false"
+                android:textColor="#E5E7EB" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>
