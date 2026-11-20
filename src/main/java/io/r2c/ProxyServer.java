@@ -50,9 +50,19 @@ public final class ProxyServer {
         this.chatToResponses = new ChatToResponses(config);
 
         this.server = HttpServer.create(new InetSocketAddress(config.bindAddress, config.port), 0);
-        // Virtual threads keep streaming responses cheap: each SSE stream holds a
-        // thread for its whole lifetime.
-        this.executor = Executors.newVirtualThreadPerTaskExecutor();
+        // Each SSE stream holds a thread for its whole lifetime, so use a cached
+        // pool: threads are reused across short requests and new ones are created
+        // only when many streams run concurrently.
+        this.executor = Executors.newCachedThreadPool(new java.util.concurrent.ThreadFactory() {
+            private final AtomicLong counter = new AtomicLong();
+
+            @Override
+            public Thread newThread(Runnable r) {
+                Thread t = new Thread(r, "r2c-http-" + counter.incrementAndGet());
+                t.setDaemon(true);
+                return t;
+            }
+        });
         server.setExecutor(executor);
 
         server.createContext("/", this::route);
@@ -215,7 +225,7 @@ public final class ProxyServer {
 
         String chatId = ResponsesToChat.newChatCompletionId();
         long created = Instant.now().getEpochSecond();
-        StreamTranslator translator = new StreamTranslator(chatId, created, model, config.alwaysIncludeUsage());
+        StreamTranslator translator = new StreamTranslator(chatId, created, model, config.alwaysIncludeUsage);
 
         OutputStream out = ex.getResponseBody();
         boolean sawTerminal = false;

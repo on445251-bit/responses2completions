@@ -9,10 +9,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 /**
  * Thin wrapper over {@link HttpClient} for upstream Responses calls.
@@ -142,27 +138,6 @@ public final class UpstreamClient {
         }
     }
 
-    /**
-     * Sends a request and enforces a hard deadline, cancelling the exchange when
-     * the client goes away. Not used by the normal paths (which need the raw
-     * stream), but handy for health probes.
-     */
-    public CompletableFuture<String> probe(long timeoutMillis) {
-        HttpRequest req = baseRequest(config.modelsUrl(), null).GET().build();
-        return http.sendAsync(req, HttpResponse.BodyHandlers.ofString())
-                .thenApply(HttpResponse::body)
-                .orTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
-                .exceptionally(t -> {
-                    if (t instanceof TimeoutException) return "timeout";
-                    return "unreachable: " + unwrap(t).getMessage();
-                });
-    }
-
-    private static Throwable unwrap(Throwable t) {
-        if (t instanceof ExecutionException && t.getCause() != null) return t.getCause();
-        return t;
-    }
-
     private static String summarize(String body) {
         if (body == null) return "";
         String flat = body.replaceAll("\\s+", " ").trim();
@@ -170,6 +145,13 @@ public final class UpstreamClient {
     }
 
     public void close() {
-        http.close();
+        // HttpClient is not AutoCloseable before Java 21, so shut it down
+        // reflectively: on 21+ this releases the selector and executor, on 17 it is
+        // a no-op and the daemon threads die with the JVM.
+        try {
+            HttpClient.class.getMethod("close").invoke(http);
+        } catch (ReflectiveOperationException | RuntimeException ignored) {
+            // Older runtime: nothing to release explicitly.
+        }
     }
 }
