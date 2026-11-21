@@ -21,6 +21,60 @@
 - **usage 映射**：`input_tokens/output_tokens` → `prompt_tokens/completion_tokens`，含 cached / reasoning 明细
 - **零依赖运行时**：纯 JDK（`HttpClient` + `com.sun.net.httpserver`），只有一个 jar
 - **密钥透传**：客户端自带的 key 可透传，也可以由服务端兜底
+- **Android 版**：前台服务 + 悬浮窗，把手机本身变成中转站（见下）
+
+## Android 版
+
+`android/` 是一个独立 Gradle 工程，直接复用 `src/main/java` 里的核心代码，只把
+JDK 专有的 `HttpClient` / `com.sun.net.httpserver` 换成 `HttpURLConnection` 和自带的
+`net/NanoHttpServer`（纯 socket HTTP/1.1 实现，支持 chunked）。CI 会产出
+`app-debug.apk`。
+
+装好之后：
+
+1. 打开 App，点"启动"（或直接启动前台服务）。
+2. **必须授予悬浮窗权限**（`SYSTEM_ALERT_WINDOW`）。原因见下。
+3. 在设置里填上游地址、key、模型，保存。
+
+### 为什么悬浮窗是必需的
+
+在国内 ROM（实测 ColorOS / OPPO）上，一个只挂了前台服务、没有可见窗口的进程，会在
+启动约 5 秒后被 `OplusHansManager` 判定为 cached 进程并**整进程冻结**：
+
+```
+OplusBatteryStatsManager: updateStateTime: ... state to bg, isFg = false
+OplusHansManager: freeze uid: 10553 ... pids: [26208] scene: LcdOn
+IHansComunication: HANS sendMessageToKernel: ... pkgCmd = ADD_ONE_UID
+```
+
+冻结发生在内核层（cgroup freezer），进程里**所有线程**都会卡在 `do_freezer_trap`，
+包括 accept 线程和看门狗线程。表现是：端口在启动几秒后从能连变成 connect 超时，
+而进程 pid 不变、通知仍然写着"运行中"——非常像"服务静默死亡"，实际是整体被冻住。
+
+持有 `TYPE_APPLICATION_OVERLAY` 窗口能把进程重要性抬到不会进 cached 冻结组：
+
+```
+mAttrs={... ty=APPLICATION_OVERLAY ...}
+```
+
+实测：授予悬浮窗权限后，把 App 切到后台连续轮询 90 秒，`/health` 0 次失败、pid 不变；
+未授权时 5–6 秒即失效。电池优化白名单和 `cached_apps_freezer=disabled` 在这台机器上
+都**无效**，只有悬浮窗有效。
+
+### 从命令行写配置
+
+`shared_prefs` 不能从 shell 直接改：App 进程有自己的内存副本，下次保存会覆盖文件，
+而且加载时可能看不到外部写入的内容。要改配置，走 App 自己的写入路径：
+
+```bash
+adb shell am start -n io.r2c.android/.MainActivity \
+  --es r2c_base_url 'https://api.example.com' \
+  --es r2c_api_key 'sk-...' \
+  --es r2c_model 'gpt-6.1-sol' \
+  --es r2c_user_agent 'codex_cli_rs/0.42.0' \
+  --ei r2c_port 8787 \
+  --ei r2c_timeout 600
+```
 
 ## 快速开始
 
