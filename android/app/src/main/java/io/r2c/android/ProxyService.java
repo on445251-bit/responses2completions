@@ -83,14 +83,24 @@ public class ProxyService extends Service {
     private long totalTokens;
     private final Object lock = new Object();
 
-    /** Periodic self-check: restarts the listener if it stopped accepting. */
-    private final android.os.Handler watchdogHandler =
-            new android.os.Handler(android.os.Looper.getMainLooper());
+    /**
+     * Periodic self-check: restarts the listener if its accept loop died.
+     *
+     * <p>Runs on a dedicated HandlerThread, never the main thread: on Android any
+     * socket connect() from the main thread throws NetworkOnMainThreadException,
+     * which used to crash the whole process ~10s after start and made the port look
+     * like it silently died.
+     */
+    private android.os.HandlerThread watchdogThread;
+    private android.os.Handler watchdogHandler;
     private final Runnable watchdog = new Runnable() {
         @Override
         public void run() {
             io.r2c.ProxyServer current = server;
-            if (current != null) {
+            if (current == null) {
+                return;
+            }
+            try {
                 if (!current.isAccepting()) {
                     // The listener died while the process lived on. This is invisible
                     // to the user otherwise: the notification keeps saying "running"
@@ -102,13 +112,40 @@ public class ProxyService extends Service {
                         appendLogFile("INFO listener restarted");
                     } catch (Throwable e) {
                         appendLogFile("ERROR restart failed: " + e);
-                        updateNotification("端口异常", "正在重试…");
+                        postToMain(() -> updateNotification("端口异常", "正在重试…"));
                     }
                 }
-                watchdogHandler.postDelayed(this, 10_000);
+            } catch (Throwable e) {
+                // A self-check must never be able to kill the service.
+                appendLogFile("WARN watchdog check failed: " + e);
+            } finally {
+                android.os.Handler h = watchdogHandler;
+                if (h != null && server != null) {
+                    h.postDelayed(this, 10_000);
+                }
             }
         }
     };
+
+    private void postToMain(Runnable r) {
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(r);
+    }
+
+    private void armWatchdog() {
+        if (watchdogHandler == null) {
+            watchdogThread = new android.os.HandlerThread("r2c-watchdog");
+            watchdogThread.start();
+            watchdogHandler = new android.os.Handler(watchdogThread.getLooper());
+        }
+        watchdogHandler.removeCallbacks(watchdog);
+        watchdogHandler.postDelayed(watchdog, 10_000);
+    }
+
+    private void disarmWatchdog() {
+        if (watchdogHandler != null) {
+            watchdogHandler.removeCallbacks(watchdog);
+        }
+    }
 
     public static void start(Context context) {
         Intent i = new Intent(context, ProxyService.class).setAction(ACTION_START);
@@ -196,10 +233,10 @@ public class ProxyService extends Service {
 
         server = created;
         acquireWakeLock();
-        // Self-heal: if the listener stops accepting, restart it instead of leaving
-        // the user with a "running" badge and dead port.
-        watchdogHandler.removeCallbacks(watchdog);
-        watchdogHandler.postDelayed(watchdog, 10_000);
+        // Self-heal: if the listener's accept loop dies, restart it instead of
+        // leaving the user with a "running" badge and a dead port.
+        armWatchdog();
+        appendLogFile("INFO service ready, watchdog armed, accepting=" + created.isAccepting());
         updateNotification("运行中 · 端口 " + created.boundPort(),
                 describeEndpoint(settings, created.boundPort()));
         publish();
@@ -223,7 +260,7 @@ public class ProxyService extends Service {
     }
 
     private void stopProxy() {
-        watchdogHandler.removeCallbacks(watchdog);
+        disarmWatchdog();
         io.r2c.ProxyServer current = server;
         server = null;
         if (current != null) {

@@ -84,16 +84,27 @@ public final class ProxyServer {
     }
 
     /**
-     * Self-check used by the Android service's watchdog: binds a throwaway client
-     * socket to the listening port. If the accept loop died while the process kept
-     * running, this is what notices.
+     * Self-check used by the Android service's watchdog: is the accept loop still
+     * alive and is the port still bound?
+     *
+     * <p>Deliberately does <b>not</b> open a socket: this runs on the app's main
+     * thread, where any connect() raises {@link android.os.NetworkOnMainThreadException}
+     * on Android and would crash the process instead of reporting a dead port.
      */
     public boolean isAccepting() {
+        return server.isRunning();
+    }
+
+    /**
+     * Real round-trip probe (connect + optional request). Must be called from a
+     * background thread on Android.
+     */
+    public boolean probe() {
         if (!server.isRunning()) return false;
         try (java.net.Socket probe = new java.net.Socket()) {
             probe.connect(new java.net.InetSocketAddress("127.0.0.1", server.boundPort()), 1500);
             return true;
-        } catch (java.io.IOException e) {
+        } catch (Throwable e) {
             return false;
         }
     }
