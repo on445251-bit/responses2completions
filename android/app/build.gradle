@@ -37,9 +37,13 @@ android {
 
     // The proxy core lives outside the app module and is compiled into it, so both
     // the jar build and the APK build share one copy of the translation code.
+    // Resolved through rootProject so the path does not depend on the working dir.
     sourceSets {
         main {
-            java.srcDirs += ['../src/main/java']
+            java.srcDirs = [
+                    'src/main/java',
+                    rootProject.file('../src/main/java').absolutePath,
+            ]
             // Exclude the CLI entry point: it uses System.exit and env vars.
             java.filter.exclude 'io/r2c/Main.java'
         }
