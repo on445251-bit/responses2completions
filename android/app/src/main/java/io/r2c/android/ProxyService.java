@@ -139,9 +139,13 @@ public class ProxyService extends Service {
         AppSettings settings = AppSettings.load(this);
         io.r2c.Config config = settings.toConfig();
 
-        // Route the core logger into the UI so the user sees the same lines the CLI
-        // prints, which is the whole debugging story for a headless proxy.
-        io.r2c.util.Log.setSink(line -> Log.d(TAG, line));
+        // Mirror the core logger into logcat and a small file. The file matters on
+        // devices where logcat is filtered: without it a failed bind leaves no
+        // trace of why.
+        io.r2c.util.Log.setSink(line -> {
+            Log.d(TAG, line);
+            appendLogFile(line);
+        });
         io.r2c.util.Log.init(io.r2c.util.Log.Level.INFO);
         config.logSummary();
 
@@ -155,10 +159,11 @@ public class ProxyService extends Service {
 
         try {
             created.start();
-        } catch (Exception e) {
+        } catch (Throwable e) {
             Log.e(TAG, "cannot start proxy", e);
+            appendLogFile("ERROR cannot start proxy: " + e);
             updateNotification("启动失败", "端口 " + settings.port + " 不可用");
-            publishError(e.getMessage());
+            publishError(e.getMessage() == null ? e.toString() : e.getMessage());
             return;
         }
 
@@ -167,6 +172,23 @@ public class ProxyService extends Service {
         updateNotification("运行中 · 端口 " + created.boundPort(),
                 describeEndpoint(settings, created.boundPort()));
         publish();
+    }
+
+    /** Appends one line to files/proxy.log, keeping the file small. */
+    private void appendLogFile(String line) {
+        try {
+            java.io.File f = new java.io.File(getFilesDir(), "proxy.log");
+            if (f.length() > 256 * 1024) {
+                //noinspection ResultOfMethodCallIgnored
+                f.delete();
+            }
+            try (java.io.FileWriter w = new java.io.FileWriter(f, true)) {
+                w.write(line);
+                w.write('\n');
+            }
+        } catch (Exception ignored) {
+            // Logging must never break the service.
+        }
     }
 
     private void stopProxy() {
