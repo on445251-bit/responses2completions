@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -221,7 +222,7 @@ public final class NanoHttpServer {
     public void start() throws IOException {
         serverSocket = new ServerSocket();
         serverSocket.setReuseAddress(true);
-        serverSocket.bind(new InetSocketAddress(bindAddress, port), 64);
+        bindListeningSocket();
         running.set(true);
 
         workers = Executors.newCachedThreadPool(new ThreadFactory() {
@@ -238,6 +239,28 @@ public final class NanoHttpServer {
         acceptThread = new Thread(this::acceptLoop, "r2c-accept");
         acceptThread.setDaemon(true);
         acceptThread.start();
+    }
+
+    /**
+     * Binds the listening socket, forcing the family the caller asked for.
+     *
+     * <p>{@code new InetSocketAddress("0.0.0.0", port)} resolves through the system
+     * resolver, which on Android prefers IPv6 and produces a {@code ::} wildcard.
+     * That leaves 127.0.0.1 unwritable even though the port "looks" open. Building
+     * the address with {@code InetAddress.getByName} on the literal does the same
+     * thing, so the family is pinned explicitly instead.
+     */
+    private void bindListeningSocket() throws IOException {
+        String host = bindAddress == null ? "" : bindAddress.trim();
+        InetAddress address;
+        if (host.isEmpty() || host.equals("0.0.0.0")) {
+            address = InetAddress.getByAddress(new byte[]{0, 0, 0, 0});
+        } else if (host.equals("::") || host.equals("[::]")) {
+            address = InetAddress.getByAddress(new byte[16]);
+        } else {
+            address = InetAddress.getByName(host);
+        }
+        serverSocket.bind(new InetSocketAddress(address, port), 64);
     }
 
     /** The port actually bound (useful when 0 was requested). */
