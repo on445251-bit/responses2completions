@@ -106,7 +106,64 @@ public class MainActivity extends AppCompatActivity implements ProxyService.List
         findViewById(R.id.battery_button).setOnClickListener(v -> requestBatteryExemption());
 
         requestNotificationPermission();
+        applyIntentOverrides(getIntent());
         ensureServiceStarted();
+    }
+
+    /**
+     * Debug/config entry point: lets the settings be written from the outside
+     * without touching the UI, e.g.
+     * {@code am start -n io.r2c.android/.MainActivity --es r2c_base_url ...}.
+     *
+     * <p>SharedPreferences cannot be seeded by writing the XML from a shell: the
+     * app process keeps its own in-memory copy and overwrites the file on the next
+     * save, and the loader ignores files it did not write itself. Going through the
+     * app guarantees the values are actually adopted.
+     */
+    private void applyIntentOverrides(Intent intent) {
+        if (intent == null) return;
+        boolean touched = false;
+        AppSettings s = AppSettings.load(this);
+
+        String baseUrl = intent.getStringExtra("r2c_base_url");
+        if (baseUrl != null) {
+            s.baseUrl = baseUrl.trim();
+            touched = true;
+        }
+        String apiKey = intent.getStringExtra("r2c_api_key");
+        if (apiKey != null) {
+            s.apiKey = apiKey.trim();
+            touched = true;
+        }
+        String model = intent.getStringExtra("r2c_model");
+        if (model != null) {
+            s.defaultModel = model.trim();
+            touched = true;
+        }
+        String ua = intent.getStringExtra("r2c_user_agent");
+        if (ua != null) {
+            s.userAgent = ua.trim();
+            touched = true;
+        }
+        int port = intent.getIntExtra("r2c_port", -1);
+        if (AppSettings.isValidPort(port)) {
+            s.port = port;
+            touched = true;
+        }
+        int timeout = intent.getIntExtra("r2c_timeout", -1);
+        if (timeout > 0) {
+            s.timeoutSeconds = timeout;
+            touched = true;
+        }
+
+        if (touched) {
+            if (service != null) {
+                service.applySettings(s);
+            } else {
+                s.save(this);
+            }
+            toast("配置已写入");
+        }
     }
 
     @Override
