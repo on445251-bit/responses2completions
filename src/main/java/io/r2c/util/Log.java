@@ -8,7 +8,7 @@ import java.time.format.DateTimeFormatter;
  *
  * <p>Writes to stdout (which the container runtime or logcat collects) and
  * optionally forwards each formatted line to a {@link Sink}. The Android app uses
- * the sink to mirror the proxy log into its own UI and the floating window.
+ * the sink to mirror the proxy log into its own UI and a log file.
  */
 public final class Log {
 
@@ -53,7 +53,7 @@ public final class Log {
             try {
                 s.onLog(line);
             } catch (RuntimeException ignored) {
-                // A broken UI sink must never break request handling.
+                // A broken sink must never break request handling.
             }
         }
         if (t != null && threshold.rank >= Level.DEBUG.rank) {

@@ -83,6 +83,38 @@ public final class ProxyServer {
         return server.connectionCount();
     }
 
+    /**
+     * Self-check used by the Android service's watchdog: binds a throwaway client
+     * socket to the listening port. If the accept loop died while the process kept
+     * running, this is what notices.
+     */
+    public boolean isAccepting() {
+        if (!server.isRunning()) return false;
+        try (java.net.Socket probe = new java.net.Socket()) {
+            probe.connect(new java.net.InetSocketAddress("127.0.0.1", server.boundPort()), 1500);
+            return true;
+        } catch (java.io.IOException e) {
+            return false;
+        }
+    }
+
+    /** Restarts the listener in place, keeping configuration. */
+    public void restart() {
+        try {
+            server.stop();
+        } catch (RuntimeException ignored) {
+            // best effort
+        }
+        try {
+            server.start();
+            Log.info("listener restarted on port " + server.boundPort());
+        } catch (java.io.IOException e) {
+            Log.error("cannot restart listener", e);
+            throw new ProxyException(503, "server_error", "bind_failed",
+                    "cannot bind port " + config.port + ": " + e.getMessage());
+        }
+    }
+
     public Config config() {
         return config;
     }

@@ -5,7 +5,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -242,25 +241,22 @@ public final class NanoHttpServer {
     }
 
     /**
-     * Binds the listening socket, forcing the family the caller asked for.
+     * Binds the listening socket.
      *
-     * <p>{@code new InetSocketAddress("0.0.0.0", port)} resolves through the system
-     * resolver, which on Android prefers IPv6 and produces a {@code ::} wildcard.
-     * That leaves 127.0.0.1 unwritable even though the port "looks" open. Building
-     * the address with {@code InetAddress.getByName} on the literal does the same
-     * thing, so the family is pinned explicitly instead.
+     * <p>Kept deliberately dumb: a plain {@code bind} to the requested address and
+     * port. Earlier attempts to pin the address family by hand caused the socket to
+     * accept a few connections and then stop answering on some Android devices, so
+     * the address is passed through as-is and the platform decides.
      */
     private void bindListeningSocket() throws IOException {
         String host = bindAddress == null ? "" : bindAddress.trim();
-        InetAddress address;
-        if (host.isEmpty() || host.equals("0.0.0.0")) {
-            address = InetAddress.getByAddress(new byte[]{0, 0, 0, 0});
-        } else if (host.equals("::") || host.equals("[::]")) {
-            address = InetAddress.getByAddress(new byte[16]);
-        } else {
-            address = InetAddress.getByName(host);
+        if (host.isEmpty() || host.equals("0.0.0.0") || host.equals("*")) {
+            // Wildcard: equivalent to binding every interface, and the form Android
+            // handles most reliably.
+            serverSocket.bind(new InetSocketAddress(port), 64);
+            return;
         }
-        serverSocket.bind(new InetSocketAddress(address, port), 64);
+        serverSocket.bind(new InetSocketAddress(host, port), 64);
     }
 
     /** The port actually bound (useful when 0 was requested). */
@@ -300,10 +296,21 @@ public final class NanoHttpServer {
             try {
                 socket = serverSocket.accept();
             } catch (IOException e) {
-                if (running.get()) {
-                    // Unexpected; keep serving other connections.
-                    continue;
+                if (!running.get()) return;
+                // Accepting can fail transiently (fd pressure, socket closed by the
+                // runtime). Without a short back-off this becomes a busy loop that
+                // pegs a core and stops answering entirely.
+                Log.warn("accept failed: " + e);
+                try {
+                    Thread.sleep(50);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return;
                 }
+                continue;
+            } catch (RuntimeException e) {
+                if (!running.get()) return;
+                Log.warn("accept crashed: " + e);
                 return;
             }
             connections.incrementAndGet();
@@ -312,8 +319,15 @@ public final class NanoHttpServer {
                 closeQuietly(socket);
                 return;
             }
-            pool.execute(() -> serve(socket));
+            try {
+                pool.execute(() -> serve(socket));
+            } catch (RuntimeException e) {
+                // Pool already shut down mid-accept.
+                Log.warn("cannot dispatch connection: " + e);
+                closeQuietly(socket);
+            }
         }
+        Log.info("accept loop exited");
     }
 
     private void serve(Socket socket) {
@@ -367,11 +381,14 @@ public final class NanoHttpServer {
             }
         } catch (SocketException e) {
             // Client disconnected (very common for cancelled SSE streams).
+            io.r2c.util.Log.debug("connection closed: " + e.getMessage());
         } catch (IOException e) {
             // Malformed request or broken pipe: nothing useful to do.
-        } catch (RuntimeException e) {
-            // Never let a handler bug kill the accept loop's worker silently.
-            System.err.println("r2c: handler failure: " + e);
+            io.r2c.util.Log.debug("connection error: " + e);
+        } catch (Throwable e) {
+            // A handler bug must never take down the accept loop silently; this is
+            // the difference between "requests fail" and "requests hang forever".
+            io.r2c.util.Log.error("handler failure", e);
         }
     }
 

@@ -83,6 +83,33 @@ public class ProxyService extends Service {
     private long totalTokens;
     private final Object lock = new Object();
 
+    /** Periodic self-check: restarts the listener if it stopped accepting. */
+    private final android.os.Handler watchdogHandler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable watchdog = new Runnable() {
+        @Override
+        public void run() {
+            io.r2c.ProxyServer current = server;
+            if (current != null) {
+                if (!current.isAccepting()) {
+                    // The listener died while the process lived on. This is invisible
+                    // to the user otherwise: the notification keeps saying "running"
+                    // while every request times out.
+                    appendLogFile("WARN listener not accepting on port " + current.boundPort()
+                            + ", restarting");
+                    try {
+                        current.restart();
+                        appendLogFile("INFO listener restarted");
+                    } catch (Throwable e) {
+                        appendLogFile("ERROR restart failed: " + e);
+                        updateNotification("端口异常", "正在重试…");
+                    }
+                }
+                watchdogHandler.postDelayed(this, 10_000);
+            }
+        }
+    };
+
     public static void start(Context context) {
         Intent i = new Intent(context, ProxyService.class).setAction(ACTION_START);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -169,6 +196,10 @@ public class ProxyService extends Service {
 
         server = created;
         acquireWakeLock();
+        // Self-heal: if the listener stops accepting, restart it instead of leaving
+        // the user with a "running" badge and dead port.
+        watchdogHandler.removeCallbacks(watchdog);
+        watchdogHandler.postDelayed(watchdog, 10_000);
         updateNotification("运行中 · 端口 " + created.boundPort(),
                 describeEndpoint(settings, created.boundPort()));
         publish();
@@ -192,6 +223,7 @@ public class ProxyService extends Service {
     }
 
     private void stopProxy() {
+        watchdogHandler.removeCallbacks(watchdog);
         io.r2c.ProxyServer current = server;
         server = null;
         if (current != null) {
